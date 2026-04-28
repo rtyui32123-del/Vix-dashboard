@@ -185,32 +185,33 @@ def calc_averages(dates, vals):
 # ── X축 눈금: 6개월 화면용 ─────────────────────────────
 def make_tick_vals_for_recent(recent_dates):
     """
-    - 과거 5개월: 15일 간격
-    - 최근 1주일(7거래일): 매일 (세로로 표기)
+    - 전 구간: 15일 간격 (가로 표시)
+    - 마지막 거래일: 항상 포함 (조회 기준일)
     """
     if not recent_dates:
         return [], []
 
-    recent_week = recent_dates[-7:] if len(recent_dates) >= 7 else recent_dates
-    older       = recent_dates[:-7] if len(recent_dates) >  7 else []
-
     tick_vals, tick_texts = [], []
+    last_pick = None
+    for d in recent_dates:
+        dt = datetime.strptime(d, "%Y-%m-%d")
+        if last_pick is None or (dt - last_pick).days >= 15:
+            tick_vals.append(d)
+            tick_texts.append(d[5:])
+            last_pick = dt
 
-    # 과거: 15일 간격
-    if older:
-        last_pick = None
-        for d in older:
-            dt = datetime.strptime(d, "%Y-%m-%d")
-            if last_pick is None or (dt - last_pick).days >= 15:
-                tick_vals.append(d)
-                tick_texts.append(d[5:])
-                last_pick = dt
-
-    # 최근 1주일: 매일 (세로 — 줄바꿈으로 표시)
-    for d in recent_week:
-        tick_vals.append(d)
-        m, day = d[5:7], d[8:10]
-        tick_texts.append(f"{m}<br>/<br>{day}")
+    # 마지막 거래일은 항상 포함 (조회 기준일)
+    last_date = recent_dates[-1]
+    if last_date not in tick_vals:
+        # 마지막 tick과 너무 가까우면 마지막 tick 제거
+        if tick_vals:
+            last_tick_dt = datetime.strptime(tick_vals[-1], "%Y-%m-%d")
+            last_dt      = datetime.strptime(last_date,    "%Y-%m-%d")
+            if (last_dt - last_tick_dt).days < 7:
+                tick_vals.pop()
+                tick_texts.pop()
+        tick_vals.append(last_date)
+        tick_texts.append(last_date[5:])
 
     return tick_vals, tick_texts
 
@@ -343,12 +344,12 @@ fig.add_trace(go.Scatter(
 fig.add_vline(x=recent_dates[-1], line_dash="dash", line_color="#999", line_width=1)
 
 fig.update_layout(
-    height=520,
+    height=480,
     hovermode="x unified",
     legend=dict(orientation="h", y=1.04, x=0, font=dict(size=11)),
     paper_bgcolor="white",
     plot_bgcolor="white",
-    margin=dict(l=40, r=40, t=50, b=70),
+    margin=dict(l=40, r=40, t=50, b=40),
     font=dict(size=11)
 )
 
