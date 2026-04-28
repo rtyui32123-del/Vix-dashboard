@@ -8,19 +8,14 @@ from datetime import datetime, timedelta
 st.set_page_config(
     page_title="VIX 대시보드",
     page_icon="📊",
-    layout="centered"   # 모바일: centered가 더 적합
+    layout="centered"
 )
 
 # ── 모바일 최적화 CSS ─────────────────────────────────
 st.markdown("""
 <style>
-/* 전체 폰트 크기 */
 html, body, [class*="css"] { font-size: 15px; }
-
-/* 상단 여백 줄이기 */
 .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
-
-/* 지표 카드 */
 .card {
     background: #f8f9fa;
     border-radius: 14px;
@@ -31,8 +26,6 @@ html, body, [class*="css"] { font-size: 15px; }
 .card-label { font-size: 12px; color: #888; margin-bottom: 2px; }
 .card-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
 .card-delta { font-size: 13px; margin-top: 2px; }
-
-/* 신호 배지 */
 .badge {
     display: inline-block;
     padding: 6px 16px;
@@ -40,8 +33,6 @@ html, body, [class*="css"] { font-size: 15px; }
     font-size: 16px;
     font-weight: 700;
 }
-
-/* 조언 박스 */
 .advice-box {
     border-radius: 12px;
     padding: 14px 16px;
@@ -49,39 +40,61 @@ html, body, [class*="css"] { font-size: 15px; }
     font-size: 14px;
     line-height: 1.6;
 }
-
-/* Streamlit 기본 여백 조정 */
 div[data-testid="stVerticalBlock"] > div { gap: 0.4rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── 데이터 로드 ───────────────────────────────────────
+# ── 데이터 로드 (안전 처리) ─────────────────────────────
 @st.cache_data(ttl=3600)
 def load_data():
-    end   = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-    start = (datetime.today() - timedelta(days=183)).strftime("%Y-%m-%d")
-
-    vix_df = yf.download("^VIX",  start=start, end=end, progress=False)
-    sp_df  = yf.download("^GSPC", start=start, end=end, progress=False)
-
-    if isinstance(vix_df.columns, pd.MultiIndex):
-        vix = vix_df["Close"]["^VIX"]
-        sp  = sp_df["Close"]["^GSPC"]
-    else:
-        vix = vix_df["Close"]
-        sp  = sp_df["Close"]
+    end   = (datetime.today() + timedelta(days=2)).strftime("%Y-%m-%d")
+    start = (datetime.today() - timedelta(days=200)).strftime("%Y-%m-%d")
 
     dates, vix_vals, sp_vals = [], [], []
+
+    try:
+        vix_df = yf.download("^VIX",  start=start, end=end, progress=False, auto_adjust=True)
+        sp_df  = yf.download("^GSPC", start=start, end=end, progress=False, auto_adjust=True)
+    except Exception as e:
+        return dates, vix_vals, sp_vals, f"다운로드 오류: {e}"
+
+    if vix_df.empty or sp_df.empty:
+        return dates, vix_vals, sp_vals, "데이터가 비어있습니다 (yfinance 일시 장애 가능)"
+
+    # 컬럼 구조 자동 감지
+    try:
+        if isinstance(vix_df.columns, pd.MultiIndex):
+            vix = vix_df["Close"]["^VIX"]
+            sp  = sp_df["Close"]["^GSPC"]
+        else:
+            vix = vix_df["Close"]
+            sp  = sp_df["Close"]
+    except Exception as e:
+        return dates, vix_vals, sp_vals, f"데이터 구조 오류: {e}"
+
+    # 날짜별 정리 (둘 다 있는 날만)
+    vix_dict, sp_dict = {}, {}
     for idx in vix.index:
         key = idx.strftime("%Y-%m-%d") if hasattr(idx, 'strftime') else str(idx)[:10]
         v = vix[idx]
-        s = sp.get(idx, None)
-        if pd.notna(v) and s is not None and pd.notna(s):
-            dates.append(key)
-            vix_vals.append(round(float(v), 2))
-            sp_vals.append(round(float(s), 2))
+        if pd.notna(v):
+            vix_dict[key] = round(float(v), 2)
+    for idx in sp.index:
+        key = idx.strftime("%Y-%m-%d") if hasattr(idx, 'strftime') else str(idx)[:10]
+        s = sp[idx]
+        if pd.notna(s):
+            sp_dict[key] = round(float(s), 2)
 
-    return dates, vix_vals, sp_vals
+    common = sorted(set(vix_dict.keys()) & set(sp_dict.keys()))
+    for d in common:
+        dates.append(d)
+        vix_vals.append(vix_dict[d])
+        sp_vals.append(sp_dict[d])
+
+    if not dates:
+        return dates, vix_vals, sp_vals, "공통 거래일이 없습니다"
+
+    return dates, vix_vals, sp_vals, None
 
 def get_signal(v):
     if v < 15:   return "탐욕 😊",      "#2E7D32", "#E8F5E9", "#A5D6A7"
@@ -114,39 +127,57 @@ def get_advice(vix_val, vix_change, sp_pct):
 def make_tick_vals(dates):
     tick_vals, tick_texts = [], []
     week_seen = set()
-    for d in dates[:-7]:
+    older  = dates[:-7] if len(dates) > 7 else []
+    recent = dates[-7:] if len(dates) >= 7 else dates
+    for d in older:
         dt = datetime.strptime(d, "%Y-%m-%d")
         wk = dt.isocalendar()[:2]
         if wk not in week_seen:
             week_seen.add(wk)
             tick_vals.append(d)
             tick_texts.append(d[5:])
-    for d in dates[-7:]:
+    for d in recent:
         tick_vals.append(d)
         tick_texts.append(d[5:])
     return tick_vals, tick_texts
 
 def axis_range(vals, factor=1.5):
+    if not vals: return [0, 1]
     mn, mx = min(vals), max(vals)
+    if mn == mx: return [mn * 0.95, mx * 1.05]
     mid  = (mn + mx) / 2
     half = (mx - mn) / 2 * factor
     return [max(0, mid - half), mid + half]
 
 # ── 데이터 fetch ──────────────────────────────────────
 with st.spinner("최신 데이터 불러오는 중..."):
-    try:
-        dates, vix_vals, sp_vals = load_data()
-    except Exception as e:
-        st.error(f"데이터 로드 실패: {e}")
-        st.stop()
+    dates, vix_vals, sp_vals, err = load_data()
 
+# ── 데이터 없으면 안내 후 종료 ─────────────────────────
+if not dates:
+    st.markdown("""
+    <div style='text-align:center; padding: 40px 20px;'>
+      <div style='font-size:48px;'>⏳</div>
+      <div style='font-size:18px; font-weight:600; margin-top:12px;'>데이터를 불러올 수 없습니다</div>
+      <div style='font-size:13px; color:#888; margin-top:8px;'>Yahoo Finance 일시적 장애이거나 휴장일일 수 있어요.</div>
+      <div style='font-size:13px; color:#888;'>잠시 후 다시 시도해주세요.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    if err:
+        st.caption(f"상세: {err}")
+    if st.button("🔄 다시 시도", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
+
+# ── 정상 처리 ─────────────────────────────────────────
 latest_vix  = vix_vals[-1]
 latest_sp   = sp_vals[-1]
 prev_vix    = vix_vals[-2] if len(vix_vals) > 1 else latest_vix
 prev_sp     = sp_vals[-2]  if len(sp_vals)  > 1 else latest_sp
 vix_change  = latest_vix - prev_vix
 sp_change   = latest_sp  - prev_sp
-sp_pct      = sp_change / prev_sp * 100
+sp_pct      = sp_change / prev_sp * 100 if prev_sp else 0
 
 signal_label, signal_color, signal_bg, signal_border = get_signal(latest_vix)
 direction, core = get_advice(latest_vix, vix_change, sp_pct)
@@ -166,7 +197,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 신호 배지 (가장 크게, 중앙) ───────────────────────
+# ── 신호 배지 ─────────────────────────────────────────
 st.markdown(f"""
 <div style='text-align:center; margin: 10px 0;'>
   <span class='badge' style='background:{signal_bg}; color:{signal_color}; border: 2px solid {signal_border}; font-size:20px; padding: 8px 28px;'>
@@ -175,9 +206,8 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 지표 카드 2개 나란히 ──────────────────────────────
+# ── 지표 카드 2개 ─────────────────────────────────────
 col1, col2 = st.columns(2)
-
 with col1:
     st.markdown(f"""
     <div class='card' style='border-left-color:{vix_color};'>
@@ -260,7 +290,7 @@ fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0",
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── 투자 조언 박스 ────────────────────────────────────
+# ── 투자 조언 ─────────────────────────────────────────
 st.markdown(f"""
 <div class='advice-box' style='background:{signal_bg}; border-left: 4px solid {signal_color};'>
   <div style='font-size:13px; font-weight:700; color:{signal_color}; margin-bottom:6px;'>
@@ -274,7 +304,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 새로고침 버튼 ─────────────────────────────────────
+# ── 새로고침 ──────────────────────────────────────────
 st.markdown("<div style='margin-top:16px;'>", unsafe_allow_html=True)
 if st.button("🔄 새로고침", use_container_width=True):
     st.cache_data.clear()
