@@ -182,46 +182,35 @@ def calc_averages(dates, vals):
         result[label] = sum(filtered) / len(filtered) if filtered else 0
     return result
 
-# ── X축 눈금: 6개월 화면용 (15일/5일 간격) ─────────────
+# ── X축 눈금: 6개월 화면용 ─────────────────────────────
 def make_tick_vals_for_recent(recent_dates):
     """
-    - 현재 월 (가장 최근 월): 5일 간격
-    - 그 외: 15일 간격
+    - 과거 5개월: 15일 간격
+    - 최근 1주일(7거래일): 매일 (세로로 표기)
     """
     if not recent_dates:
         return [], []
 
-    latest_month = recent_dates[-1][:7]   # "YYYY-MM"
-
-    # 현재 월에 속한 거래일들
-    current_month_dates = [d for d in recent_dates if d[:7] == latest_month]
-    older_dates         = [d for d in recent_dates if d[:7] != latest_month]
+    recent_week = recent_dates[-7:] if len(recent_dates) >= 7 else recent_dates
+    older       = recent_dates[:-7] if len(recent_dates) >  7 else []
 
     tick_vals, tick_texts = [], []
 
     # 과거: 15일 간격
-    if older_dates:
+    if older:
         last_pick = None
-        for d in older_dates:
+        for d in older:
             dt = datetime.strptime(d, "%Y-%m-%d")
             if last_pick is None or (dt - last_pick).days >= 15:
                 tick_vals.append(d)
                 tick_texts.append(d[5:])
                 last_pick = dt
 
-    # 현재 월: 5일 간격
-    if current_month_dates:
-        last_pick = None
-        for d in current_month_dates:
-            dt = datetime.strptime(d, "%Y-%m-%d")
-            if last_pick is None or (dt - last_pick).days >= 5:
-                tick_vals.append(d)
-                tick_texts.append(d[5:])
-                last_pick = dt
-        # 마지막 거래일은 항상 포함
-        if recent_dates[-1] not in tick_vals:
-            tick_vals.append(recent_dates[-1])
-            tick_texts.append(recent_dates[-1][5:])
+    # 최근 1주일: 매일 (세로 — 줄바꿈으로 표시)
+    for d in recent_week:
+        tick_vals.append(d)
+        m, day = d[5:7], d[8:10]
+        tick_texts.append(f"{m}<br>/<br>{day}")
 
     return tick_vals, tick_texts
 
@@ -354,12 +343,12 @@ fig.add_trace(go.Scatter(
 fig.add_vline(x=recent_dates[-1], line_dash="dash", line_color="#999", line_width=1)
 
 fig.update_layout(
-    height=480,
+    height=520,
     hovermode="x unified",
     legend=dict(orientation="h", y=1.04, x=0, font=dict(size=11)),
     paper_bgcolor="white",
     plot_bgcolor="white",
-    margin=dict(l=40, r=40, t=50, b=40),
+    margin=dict(l=40, r=40, t=50, b=70),
     font=dict(size=11)
 )
 
