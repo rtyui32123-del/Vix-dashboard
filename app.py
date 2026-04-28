@@ -15,7 +15,27 @@ st.set_page_config(
 st.markdown("""
 <style>
 html, body, [class*="css"] { font-size: 15px; }
-.block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+.block-container { padding-top: 0.6rem !important; padding-bottom: 1rem !important; }
+
+/* 헤더 */
+.app-header {
+    text-align: center;
+    padding: 4px 0;
+    width: 100%;
+}
+.app-title {
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.3;
+    word-break: keep-all;
+    white-space: nowrap;
+}
+.app-subtitle {
+    font-size: 11px;
+    color: #999;
+    margin-top: 4px;
+}
+
 .card {
     background: #f8f9fa;
     border-radius: 14px;
@@ -24,8 +44,9 @@ html, body, [class*="css"] { font-size: 15px; }
     border-left: 5px solid #ccc;
 }
 .card-label { font-size: 12px; color: #888; margin-bottom: 2px; }
-.card-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+.card-value { font-size: 26px; font-weight: 700; line-height: 1.2; }
 .card-delta { font-size: 13px; margin-top: 2px; }
+
 .badge {
     display: inline-block;
     padding: 6px 16px;
@@ -33,6 +54,7 @@ html, body, [class*="css"] { font-size: 15px; }
     font-size: 16px;
     font-weight: 700;
 }
+
 .advice-box {
     border-radius: 12px;
     padding: 14px 16px;
@@ -40,15 +62,36 @@ html, body, [class*="css"] { font-size: 15px; }
     font-size: 14px;
     line-height: 1.6;
 }
+
+/* 평균 테이블 */
+.avg-table {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 12px;
+    margin: 12px 0;
+}
+.avg-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 4px;
+    border-bottom: 1px solid #e8e8e8;
+    font-size: 13px;
+}
+.avg-row:last-child { border-bottom: none; }
+.avg-period { color: #666; font-weight: 500; }
+.avg-vix { color: #E85A2A; font-weight: 700; }
+.avg-sp { color: #1565C0; font-weight: 700; }
+
 div[data-testid="stVerticalBlock"] > div { gap: 0.4rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── 데이터 로드 (안전 처리) ─────────────────────────────
+# ── 데이터 로드 ───────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_data():
     end   = (datetime.today() + timedelta(days=2)).strftime("%Y-%m-%d")
-    start = (datetime.today() - timedelta(days=200)).strftime("%Y-%m-%d")
+    # 5년치 받아오기 (평균 계산용)
+    start = (datetime.today() - timedelta(days=365*5 + 30)).strftime("%Y-%m-%d")
 
     dates, vix_vals, sp_vals = [], [], []
 
@@ -59,9 +102,8 @@ def load_data():
         return dates, vix_vals, sp_vals, f"다운로드 오류: {e}"
 
     if vix_df.empty or sp_df.empty:
-        return dates, vix_vals, sp_vals, "데이터가 비어있습니다 (yfinance 일시 장애 가능)"
+        return dates, vix_vals, sp_vals, "데이터가 비어있습니다"
 
-    # 컬럼 구조 자동 감지
     try:
         if isinstance(vix_df.columns, pd.MultiIndex):
             vix = vix_df["Close"]["^VIX"]
@@ -72,7 +114,6 @@ def load_data():
     except Exception as e:
         return dates, vix_vals, sp_vals, f"데이터 구조 오류: {e}"
 
-    # 날짜별 정리 (둘 다 있는 날만)
     vix_dict, sp_dict = {}, {}
     for idx in vix.index:
         key = idx.strftime("%Y-%m-%d") if hasattr(idx, 'strftime') else str(idx)[:10]
@@ -124,21 +165,64 @@ def get_advice(vix_val, vix_change, sp_pct):
         core = "극단 공포 구간입니다. 반등 사례가 많지만 변동성이 매우 크므로 신중히 접근하세요."
     return direction, core
 
-def make_tick_vals(dates):
+# ── 평균 계산 ─────────────────────────────────────────
+def calc_averages(dates, vals):
+    """최근 1개월/6개월/1년/5년 평균"""
+    today = datetime.today()
+    periods = {
+        "1개월":  30,
+        "6개월":  183,
+        "1년":    365,
+        "5년":    365 * 5,
+    }
+    result = {}
+    for label, days in periods.items():
+        cutoff = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+        filtered = [v for d, v in zip(dates, vals) if d >= cutoff]
+        result[label] = sum(filtered) / len(filtered) if filtered else 0
+    return result
+
+# ── X축 눈금: 6개월 화면용 (15일/5일 간격) ─────────────
+def make_tick_vals_for_recent(recent_dates):
+    """
+    - 현재 월 (가장 최근 월): 5일 간격
+    - 그 외: 15일 간격
+    """
+    if not recent_dates:
+        return [], []
+
+    latest_month = recent_dates[-1][:7]   # "YYYY-MM"
+
+    # 현재 월에 속한 거래일들
+    current_month_dates = [d for d in recent_dates if d[:7] == latest_month]
+    older_dates         = [d for d in recent_dates if d[:7] != latest_month]
+
     tick_vals, tick_texts = [], []
-    week_seen = set()
-    older  = dates[:-7] if len(dates) > 7 else []
-    recent = dates[-7:] if len(dates) >= 7 else dates
-    for d in older:
-        dt = datetime.strptime(d, "%Y-%m-%d")
-        wk = dt.isocalendar()[:2]
-        if wk not in week_seen:
-            week_seen.add(wk)
-            tick_vals.append(d)
-            tick_texts.append(d[5:])
-    for d in recent:
-        tick_vals.append(d)
-        tick_texts.append(d[5:])
+
+    # 과거: 15일 간격
+    if older_dates:
+        last_pick = None
+        for d in older_dates:
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            if last_pick is None or (dt - last_pick).days >= 15:
+                tick_vals.append(d)
+                tick_texts.append(d[5:])
+                last_pick = dt
+
+    # 현재 월: 5일 간격
+    if current_month_dates:
+        last_pick = None
+        for d in current_month_dates:
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            if last_pick is None or (dt - last_pick).days >= 5:
+                tick_vals.append(d)
+                tick_texts.append(d[5:])
+                last_pick = dt
+        # 마지막 거래일은 항상 포함
+        if recent_dates[-1] not in tick_vals:
+            tick_vals.append(recent_dates[-1])
+            tick_texts.append(recent_dates[-1][5:])
+
     return tick_vals, tick_texts
 
 def axis_range(vals, factor=1.5):
@@ -153,14 +237,12 @@ def axis_range(vals, factor=1.5):
 with st.spinner("최신 데이터 불러오는 중..."):
     dates, vix_vals, sp_vals, err = load_data()
 
-# ── 데이터 없으면 안내 후 종료 ─────────────────────────
 if not dates:
     st.markdown("""
     <div style='text-align:center; padding: 40px 20px;'>
       <div style='font-size:48px;'>⏳</div>
       <div style='font-size:18px; font-weight:600; margin-top:12px;'>데이터를 불러올 수 없습니다</div>
-      <div style='font-size:13px; color:#888; margin-top:8px;'>Yahoo Finance 일시적 장애이거나 휴장일일 수 있어요.</div>
-      <div style='font-size:13px; color:#888;'>잠시 후 다시 시도해주세요.</div>
+      <div style='font-size:13px; color:#888; margin-top:8px;'>잠시 후 다시 시도해주세요.</div>
     </div>
     """, unsafe_allow_html=True)
     if err:
@@ -170,7 +252,14 @@ if not dates:
         st.rerun()
     st.stop()
 
-# ── 정상 처리 ─────────────────────────────────────────
+# ── 최근 6개월 데이터 (차트용) ──────────────────────────
+cutoff_6m = (datetime.today() - timedelta(days=183)).strftime("%Y-%m-%d")
+recent_idx = [i for i, d in enumerate(dates) if d >= cutoff_6m]
+recent_dates    = [dates[i]    for i in recent_idx]
+recent_vix_vals = [vix_vals[i] for i in recent_idx]
+recent_sp_vals  = [sp_vals[i]  for i in recent_idx]
+
+# ── 현재값/변화 ───────────────────────────────────────
 latest_vix  = vix_vals[-1]
 latest_sp   = sp_vals[-1]
 prev_vix    = vix_vals[-2] if len(vix_vals) > 1 else latest_vix
@@ -187,13 +276,11 @@ vix_arrow = "▲" if vix_change >= 0 else "▼"
 sp_color  = "#1B5E20" if sp_change  >= 0 else "#B71C1C"
 vix_color = "#B71C1C" if vix_change >= 0 else "#1B5E20"
 
-# ── 헤더 ──────────────────────────────────────────────
+# ── 헤더 (글자 안 짤리게) ─────────────────────────────
 st.markdown(f"""
-<div style='text-align:center; padding: 8px 0 4px;'>
-  <div style='font-size:22px; font-weight:700;'>📊 VIX & S&P 500</div>
-  <div style='font-size:12px; color:#999; margin-top:2px;'>
-    {dates[-1]} 기준 · 매시간 자동 갱신
-  </div>
+<div class='app-header'>
+  <div class='app-title'>📊 VIX & S&P 500</div>
+  <div class='app-subtitle'>{dates[-1]} 기준 · 매시간 자동 갱신</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -206,7 +293,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 지표 카드 2개 ─────────────────────────────────────
+# ── 지표 카드 ─────────────────────────────────────────
 col1, col2 = st.columns(2)
 with col1:
     st.markdown(f"""
@@ -227,7 +314,7 @@ with col2:
     """, unsafe_allow_html=True)
 
 # ── 차트 ──────────────────────────────────────────────
-tick_vals, tick_texts = make_tick_vals(dates)
+tick_vals, tick_texts = make_tick_vals_for_recent(recent_dates)
 
 fig = make_subplots(
     rows=2, cols=1,
@@ -251,20 +338,20 @@ for level, color, label in [(15,"#2E7D32","15"),(25,"#E64A19","25"),(35,"#B71C1C
     )
 
 fig.add_trace(go.Scatter(
-    x=dates, y=vix_vals, name="VIX",
+    x=recent_dates, y=recent_vix_vals, name="VIX",
     line=dict(color="#E85A2A", width=2.5),
     fill="tozeroy", fillcolor="rgba(232,90,42,0.08)",
     hovertemplate="<b>%{x}</b><br>VIX: %{y:.2f}<extra></extra>"
 ), row=1, col=1)
 
 fig.add_trace(go.Scatter(
-    x=dates, y=sp_vals, name="S&P 500",
+    x=recent_dates, y=recent_sp_vals, name="S&P 500",
     line=dict(color="#1565C0", width=2.5),
     fill="tozeroy", fillcolor="rgba(21,101,192,0.08)",
     hovertemplate="<b>%{x}</b><br>S&P: %{y:,.0f}<extra></extra>"
 ), row=2, col=1)
 
-fig.add_vline(x=dates[-1], line_dash="dash", line_color="#999", line_width=1)
+fig.add_vline(x=recent_dates[-1], line_dash="dash", line_color="#999", line_width=1)
 
 fig.update_layout(
     height=480,
@@ -278,17 +365,55 @@ fig.update_layout(
 
 fig.update_xaxes(
     showgrid=True, gridcolor="#f0f0f0",
-    tickangle=45, tickfont=dict(size=9),
+    tickangle=0, tickfont=dict(size=10),
     tickmode="array", tickvals=tick_vals, ticktext=tick_texts,
 )
 fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0",
                  title_text="VIX", title_font=dict(size=10),
-                 range=axis_range(vix_vals), row=1, col=1)
+                 range=axis_range(recent_vix_vals), row=1, col=1)
 fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0",
                  title_text="S&P", title_font=dict(size=10),
-                 range=axis_range(sp_vals), row=2, col=1)
+                 range=axis_range(recent_sp_vals), row=2, col=1)
 
 st.plotly_chart(fig, use_container_width=True)
+
+# ── 평균 테이블 ───────────────────────────────────────
+vix_avgs = calc_averages(dates, vix_vals)
+sp_avgs  = calc_averages(dates, sp_vals)
+
+st.markdown("""
+<div style='font-size:14px; font-weight:700; margin: 14px 0 6px; color:#333;'>
+  📈 기간별 평균 수치
+</div>
+""", unsafe_allow_html=True)
+
+avg_html = """<div class='avg-table'>"""
+avg_html += """<div class='avg-row' style='font-weight:700; color:#333; border-bottom:2px solid #ddd;'>
+  <span>기간</span><span class='avg-vix'>VIX 평균</span><span class='avg-sp'>S&P 평균</span>
+</div>"""
+for label in ["1개월", "6개월", "1년", "5년"]:
+    avg_html += f"""<div class='avg-row'>
+      <span class='avg-period'>최근 {label}</span>
+      <span class='avg-vix'>{vix_avgs[label]:.2f}</span>
+      <span class='avg-sp'>{sp_avgs[label]:,.0f}</span>
+    </div>"""
+avg_html += "</div>"
+st.markdown(avg_html, unsafe_allow_html=True)
+
+# 현재값 vs 평균 비교
+vix_vs_1y = (latest_vix - vix_avgs["1년"]) / vix_avgs["1년"] * 100 if vix_avgs["1년"] else 0
+sp_vs_1y  = (latest_sp  - sp_avgs["1년"])  / sp_avgs["1년"]  * 100 if sp_avgs["1년"] else 0
+
+vix_vs_color = "#B71C1C" if vix_vs_1y > 0 else "#1B5E20"
+sp_vs_color  = "#1B5E20" if sp_vs_1y  > 0 else "#B71C1C"
+
+st.markdown(f"""
+<div style='font-size:12px; color:#666; padding: 4px 4px 12px;'>
+  💡 현재값 vs 1년 평균 비교 — 
+  VIX <span style='color:{vix_vs_color}; font-weight:700'>{vix_vs_1y:+.1f}%</span> · 
+  S&P <span style='color:{sp_vs_color}; font-weight:700'>{sp_vs_1y:+.1f}%</span>
+</div>
+""", unsafe_allow_html=True)
 
 # ── 투자 조언 ─────────────────────────────────────────
 st.markdown(f"""
